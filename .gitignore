@@ -1,0 +1,32 @@
+# CMake-generated files
+build
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+vcpkg
+vcpkg_installed
+
+editor/build
+editor/dist-electron
+# Compiled binary files
+*.o
+*.obj
+*.exe
+*.out
+
+# Compiled library files
+*.so
+*.dylib
+*.dll
+*.a
+
+# Other generated files
+*.user
+*.swp
+.cache
+
+.compile_commands.json
+compile_commands.json
+install
+builds

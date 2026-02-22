@@ -1,0 +1,13 @@
+[build]
+kind = "executable"
+
+[stages]
+enabled_stages = [
+    "PreValidation",
+    "Configure",
+    "Build",
+    "Install",
+]
+auto_build_on_start = false
+
+[stages.dependencies]
