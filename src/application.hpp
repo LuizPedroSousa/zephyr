@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assert.hpp"
+#include "mesh.hpp"
 #include "vulkan.hpp"
 #include "window.hpp"
 #include <array>
@@ -30,7 +31,8 @@ public:
     m_vulkan.create_graphics_pipeline();
     m_vulkan.create_framebuffers();
     m_vulkan.create_command_pool();
-    m_vulkan.create_vertex_buffer(m_vertices);
+    m_vulkan.create_vertex_buffer(m_mesh.vertices);
+    m_vulkan.create_index_buffer(m_mesh.indices);
     m_vulkan.create_command_buffers();
     m_vulkan.create_sync_objects();
   }
@@ -75,7 +77,7 @@ public:
     vkResetFences(logical_device.handle, 1, &in_flight_fences[m_current_frame]);
 
     vkResetCommandBuffer(command_buffers[m_current_frame], 0);
-    m_vulkan.push_command_buffer(command_buffers[m_current_frame], m_vertices,
+    m_vulkan.push_command_buffer(command_buffers[m_current_frame], m_mesh,
                                  image_index, m_current_frame);
 
     VkSubmitInfo submit_info{};
@@ -130,9 +132,7 @@ private:
   Vulkan m_vulkan;
   uint32_t m_current_frame = 0;
 
-  const std::vector<Vertex> m_vertices = {{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-                                          {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-                                          {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+  Mesh m_mesh = Mesh::cube();
 };
 
 } // namespace zephyr

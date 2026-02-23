@@ -1,6 +1,7 @@
 #pragma once
 
 #include "exception.hpp"
+#include "mesh.hpp"
 #include <bits/types/cookie_io_functions_t.h>
 #include <cstddef>
 #include <fstream>
@@ -14,7 +15,6 @@
 #include <base.hpp>
 #include <cstdint>
 #include <cstring>
-#include <glm/glm.hpp>
 #include <iostream>
 #include <iterator>
 #include <log.hpp>
@@ -25,38 +25,6 @@
 #include <vulkan/vulkan_core.h>
 
 namespace zephyr {
-
-struct Vertex {
-  glm::vec2 position;
-  glm::vec3 color;
-
-  static VkVertexInputBindingDescription get_binding_description() {
-    VkVertexInputBindingDescription binding_description{};
-
-    binding_description.binding = 0;
-    binding_description.stride = sizeof(Vertex);
-    binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    return binding_description;
-  }
-
-  static std::array<VkVertexInputAttributeDescription, 2>
-  get_attribute_descriptions() {
-    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{};
-
-    attribute_descriptions[0].binding = 0;
-    attribute_descriptions[0].location = 0;
-    attribute_descriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
-    attribute_descriptions[0].offset = offsetof(Vertex, position);
-
-    attribute_descriptions[1].binding = 0;
-    attribute_descriptions[1].location = 1;
-    attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribute_descriptions[1].offset = offsetof(Vertex, color);
-
-    return attribute_descriptions;
-  }
-};
 
 static std::vector<char> read_file(const std::string &filename) {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -162,7 +130,9 @@ public:
     instance_info.ppEnabledLayerNames = validation_layers.data();
 #endif
 
+#if defined(__APPLE__)
     instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 
     int result =
         vkCreateInstance(&instance_info, nullptr, &m_instance) != VK_SUCCESS;
@@ -811,6 +781,40 @@ public:
     vkFreeMemory(m_logical_device.handle, staging_memory_buffer, nullptr);
   }
 
+  void create_index_buffer(std::vector<VertexIndice> indices) {
+    VkDeviceSize buffer_size = sizeof(indices[0]) * indices.size();
+
+    VkBuffer staging_buffer;
+    VkDeviceMemory staging_memory_buffer;
+
+    create_buffer(buffer_size,
+                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                  staging_buffer, staging_memory_buffer);
+
+    void *data;
+
+    vkMapMemory(m_logical_device.handle, staging_memory_buffer, 0,
+                (size_t)buffer_size, 0, &data);
+
+    memcpy(data, indices.data(), buffer_size);
+
+    vkUnmapMemory(m_logical_device.handle, staging_memory_buffer);
+
+    create_buffer(buffer_size,
+                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_index_buffer,
+                  m_index_buffer_memory);
+
+    copy_buffer(staging_buffer, m_index_buffer, buffer_size);
+
+    vkDestroyBuffer(m_logical_device.handle, staging_buffer, nullptr);
+    vkFreeMemory(m_logical_device.handle, staging_memory_buffer, nullptr);
+  }
+
   void copy_buffer(VkBuffer source_buffer, VkBuffer destination_buffer,
                    VkDeviceSize size) {
     VkCommandBufferAllocateInfo allocate_info{};
@@ -896,9 +900,8 @@ public:
                 "Couldn't allocate command buffer");
   }
 
-  void push_command_buffer(VkCommandBuffer command_buffer,
-                           std::vector<Vertex> vertices, uint32_t image_index,
-                           uint32_t frame_index) {
+  void push_command_buffer(VkCommandBuffer command_buffer, Mesh mesh,
+                           uint32_t image_index, uint32_t frame_index) {
     VkCommandBufferBeginInfo begin_info{};
 
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -932,6 +935,9 @@ public:
 
     vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
 
+    vkCmdBindIndexBuffer(command_buffer, m_index_buffer, 0,
+                         VK_INDEX_TYPE_UINT32);
+
     VkViewport viewport{};
 
     viewport.x = 0.0f;
@@ -950,7 +956,8 @@ public:
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-    vkCmdDraw(command_buffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(mesh.indices.size()),
+                     1, 0, 0, 0);
 
     vkCmdEndRenderPass(command_buffer);
 
@@ -1340,7 +1347,9 @@ public:
     cleanup_swap_chain(m_swap_chain, true);
 
     vkDestroyBuffer(m_logical_device.handle, m_vertex_buffer, nullptr);
+    vkDestroyBuffer(m_logical_device.handle, m_index_buffer, nullptr);
     vkFreeMemory(m_logical_device.handle, m_vertex_buffer_memory, nullptr);
+    vkFreeMemory(m_logical_device.handle, m_index_buffer_memory, nullptr);
 
     vkDestroyPipeline(m_logical_device.handle, m_graphics_pipeline, nullptr);
     vkDestroyPipelineLayout(m_logical_device.handle, m_pipeline_layout,
@@ -1409,6 +1418,9 @@ private:
 
   VkBuffer m_vertex_buffer;
   VkDeviceMemory m_vertex_buffer_memory;
+
+  VkBuffer m_index_buffer;
+  VkDeviceMemory m_index_buffer_memory;
 };
 
 } // namespace zephyr
