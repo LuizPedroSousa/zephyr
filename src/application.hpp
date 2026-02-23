@@ -1,12 +1,13 @@
 #pragma once
 
 #include "assert.hpp"
+#include "entity.hpp"
 #include "mesh.hpp"
 #include "vulkan.hpp"
 #include "window.hpp"
 #include <array>
 #include <cstdint>
-#include <glm/glm.hpp>
+#include <cstring>
 #include <vulkan/vulkan_core.h>
 
 namespace zephyr {
@@ -28,11 +29,15 @@ public:
     m_vulkan.create_swap_chain(m_window.handle());
     m_vulkan.create_image_views();
     m_vulkan.create_render_pass();
+    m_vulkan.create_descriptor_set_layout();
     m_vulkan.create_graphics_pipeline();
     m_vulkan.create_framebuffers();
     m_vulkan.create_command_pool();
     m_vulkan.create_vertex_buffer(m_mesh.vertices);
     m_vulkan.create_index_buffer(m_mesh.indices);
+    m_vulkan.create_uniform_buffers<EntityUniformBuffer>();
+    m_vulkan.create_descriptor_pool();
+    m_vulkan.create_descriptor_sets<EntityUniformBuffer>();
     m_vulkan.create_command_buffers();
     m_vulkan.create_sync_objects();
   }
@@ -77,6 +82,8 @@ public:
     vkResetFences(logical_device.handle, 1, &in_flight_fences[m_current_frame]);
 
     vkResetCommandBuffer(command_buffers[m_current_frame], 0);
+    update_uniform_buffer(swap_chain);
+
     m_vulkan.push_command_buffer(command_buffers[m_current_frame], m_mesh,
                                  image_index, m_current_frame);
 
@@ -120,6 +127,35 @@ public:
     vkQueuePresentKHR(logical_device.present_queue, &present_info);
 
     m_current_frame = (m_current_frame + 1) % m_vulkan.max_frames_in_flight();
+  }
+
+  void update_uniform_buffer(SwapChain swap_chain) {
+    static auto startTime = std::chrono::high_resolution_clock::now();
+
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(
+                     currentTime - startTime)
+                     .count();
+
+    EntityUniformBuffer uniform;
+
+    uniform.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
+                                glm::vec3(0.0, 0.0, 1.0f));
+
+    uniform.view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f),
+                               glm::vec3(0.0f, 0.0f, 1.0f));
+
+    uniform.projection = glm::perspective(
+        glm::radians(45.0f),
+        swap_chain.extent.width / (float)swap_chain.extent.height, 0.1f, 10.0f);
+
+#if BACKEND == BACKEND_VULKAN
+    uniform.projection[1][1] *= -1;
+#endif
+
+    auto uniform_buffers_mapped = m_vulkan.uniform_buffers_mapped();
+
+    memcpy(uniform_buffers_mapped[m_current_frame], &uniform, sizeof(uniform));
   }
 
   ~Application() {

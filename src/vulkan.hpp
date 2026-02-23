@@ -5,9 +5,11 @@
 #include <bits/types/cookie_io_functions_t.h>
 #include <cstddef>
 #include <fstream>
+#include <glm/vector_relational.hpp>
 #include <limits>
 #include <memory>
 #include <set>
+#include <unistd.h>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -502,6 +504,27 @@ public:
                 "Couldn't create render pass");
   }
 
+  void create_descriptor_set_layout() {
+    VkDescriptorSetLayoutBinding uniform_buffer_layout_binding{};
+
+    uniform_buffer_layout_binding.binding = 0;
+    uniform_buffer_layout_binding.descriptorType =
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uniform_buffer_layout_binding.descriptorCount = 1;
+    uniform_buffer_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uniform_buffer_layout_binding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    create_info.bindingCount = 1;
+    create_info.pBindings = &uniform_buffer_layout_binding;
+
+    ZEPH_ENSURE(vkCreateDescriptorSetLayout(
+                    m_logical_device.handle, &create_info, nullptr,
+                    &m_descriptor_set_layout) != VK_SUCCESS,
+                "Coudln't create descriptor set layout");
+  }
+
   void create_graphics_pipeline() {
     auto vertex = read_file("assets/shaders/shader.vert.spv");
     auto frag = read_file("assets/shaders/shader.frag.spv");
@@ -593,7 +616,7 @@ public:
     rasterizer_info.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer_info.lineWidth = 1.0f;
     rasterizer_info.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer_info.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer_info.depthBiasEnable = VK_FALSE;
     rasterizer_info.depthBiasConstantFactor = 0.0f;
     rasterizer_info.depthBiasClamp = 0.0f;
@@ -638,8 +661,8 @@ public:
     VkPipelineLayoutCreateInfo pipeline_layout_info{};
 
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipeline_layout_info.setLayoutCount = 0;
-    pipeline_layout_info.pSetLayouts = nullptr;
+    pipeline_layout_info.setLayoutCount = 1;
+    pipeline_layout_info.pSetLayouts = &m_descriptor_set_layout;
     pipeline_layout_info.pushConstantRangeCount = 0;
     pipeline_layout_info.pPushConstantRanges = nullptr;
 
@@ -815,6 +838,83 @@ public:
     vkFreeMemory(m_logical_device.handle, staging_memory_buffer, nullptr);
   }
 
+  template <typename T> void create_uniform_buffers() {
+    VkDeviceSize buffer_size = sizeof(T);
+
+    m_uniform_buffers.resize(MAX_FRAMES_IN_FLIGHT);
+    m_uniform_buffers_memory.resize(MAX_FRAMES_IN_FLIGHT);
+    m_uniform_buffers_mappeed.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      create_buffer(buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    m_uniform_buffers[i], m_uniform_buffers_memory[i]);
+
+      vkMapMemory(m_logical_device.handle, m_uniform_buffers_memory[i], 0,
+                  buffer_size, 0, &m_uniform_buffers_mappeed[i]);
+    }
+  }
+
+  void create_descriptor_pool() {
+    VkDescriptorPoolSize pool_size{};
+
+    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_size.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    VkDescriptorPoolCreateInfo create_info{};
+
+    create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    create_info.poolSizeCount = 1;
+    create_info.pPoolSizes = &pool_size;
+
+    create_info.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    ZEPH_ENSURE(vkCreateDescriptorPool(m_logical_device.handle, &create_info,
+                                       nullptr, &m_descriptor_pool),
+                "Couldn't create descriptor pool");
+  }
+
+  template <typename T> void create_descriptor_sets() {
+    m_descriptor_sets.resize(MAX_FRAMES_IN_FLIGHT);
+
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
+                                               m_descriptor_set_layout);
+
+    VkDescriptorSetAllocateInfo allocate_info{};
+
+    allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocate_info.descriptorPool = m_descriptor_pool;
+    allocate_info.descriptorSetCount =
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    allocate_info.pSetLayouts = layouts.data();
+
+    ZEPH_ENSURE(
+        vkAllocateDescriptorSets(m_logical_device.handle, &allocate_info,
+                                 m_descriptor_sets.data()) != VK_SUCCESS,
+        "Couldn't allocate descriptor sets");
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      VkDescriptorBufferInfo buffer_info{};
+
+      buffer_info.buffer = m_uniform_buffers[i];
+      buffer_info.offset = 0;
+      buffer_info.range = sizeof(T);
+
+      VkWriteDescriptorSet descriptor_write{};
+      descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptor_write.dstSet = m_descriptor_sets[i];
+      descriptor_write.dstBinding = 0;
+      descriptor_write.dstArrayElement = 0;
+      descriptor_write.pBufferInfo = &buffer_info;
+      descriptor_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      descriptor_write.descriptorCount = 1;
+
+      vkUpdateDescriptorSets(m_logical_device.handle, 1, &descriptor_write, 0,
+                             nullptr);
+    }
+  }
+
   void copy_buffer(VkBuffer source_buffer, VkBuffer destination_buffer,
                    VkDeviceSize size) {
     VkCommandBufferAllocateInfo allocate_info{};
@@ -955,6 +1055,10 @@ public:
     scissor.extent = m_swap_chain.extent;
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_pipeline_layout, 0, 1,
+                            &m_descriptor_sets[frame_index], 0, nullptr);
 
     vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(mesh.indices.size()),
                      1, 0, 0, 0);
@@ -1351,6 +1455,18 @@ public:
     vkFreeMemory(m_logical_device.handle, m_vertex_buffer_memory, nullptr);
     vkFreeMemory(m_logical_device.handle, m_index_buffer_memory, nullptr);
 
+    vkDestroyDescriptorPool(m_logical_device.handle, m_descriptor_pool,
+                            nullptr);
+    vkDestroyDescriptorSetLayout(m_logical_device.handle,
+                                 m_descriptor_set_layout, nullptr);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vkUnmapMemory(m_logical_device.handle, m_uniform_buffers_memory[i]);
+      vkDestroyBuffer(m_logical_device.handle, m_uniform_buffers[i], nullptr);
+      vkFreeMemory(m_logical_device.handle, m_uniform_buffers_memory[i],
+                   nullptr);
+    }
+
     vkDestroyPipeline(m_logical_device.handle, m_graphics_pipeline, nullptr);
     vkDestroyPipelineLayout(m_logical_device.handle, m_pipeline_layout,
                             nullptr);
@@ -1383,6 +1499,10 @@ public:
     return m_image_available_semaphores;
   }
 
+  std::vector<void *> uniform_buffers_mapped() {
+    return m_uniform_buffers_mappeed;
+  }
+
   std::vector<VkSemaphore> render_finished_semaphores() {
     return m_render_finished_semaphores;
   }
@@ -1402,6 +1522,7 @@ private:
   VkSurfaceKHR m_surface;
 
   VkRenderPass m_render_pass;
+  VkDescriptorSetLayout m_descriptor_set_layout;
   VkPipelineLayout m_pipeline_layout;
   VkPipeline m_graphics_pipeline;
 
@@ -1421,6 +1542,15 @@ private:
 
   VkBuffer m_index_buffer;
   VkDeviceMemory m_index_buffer_memory;
+
+  std::vector<VkBuffer> m_uniform_buffers;
+  std::vector<VkDeviceMemory> m_uniform_buffers_memory;
+
+  std::vector<void *> m_uniform_buffers_mappeed;
+
+  VkDescriptorPool m_descriptor_pool;
+
+  std::vector<VkDescriptorSet> m_descriptor_sets;
 };
 
 } // namespace zephyr
