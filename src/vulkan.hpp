@@ -14,6 +14,7 @@
 #include <base.hpp>
 #include <cstdint>
 #include <cstring>
+#include <glm/glm.hpp>
 #include <iostream>
 #include <iterator>
 #include <log.hpp>
@@ -24,6 +25,38 @@
 #include <vulkan/vulkan_core.h>
 
 namespace zephyr {
+
+struct Vertex {
+  glm::vec2 position;
+  glm::vec3 color;
+
+  static VkVertexInputBindingDescription get_binding_description() {
+    VkVertexInputBindingDescription binding_description{};
+
+    binding_description.binding = 0;
+    binding_description.stride = sizeof(Vertex);
+    binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    return binding_description;
+  }
+
+  static std::array<VkVertexInputAttributeDescription, 2>
+  get_attribute_descriptions() {
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{};
+
+    attribute_descriptions[0].binding = 0;
+    attribute_descriptions[0].location = 0;
+    attribute_descriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attribute_descriptions[0].offset = offsetof(Vertex, position);
+
+    attribute_descriptions[1].binding = 0;
+    attribute_descriptions[1].location = 1;
+    attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attribute_descriptions[1].offset = offsetof(Vertex, color);
+
+    return attribute_descriptions;
+  }
+};
 
 static std::vector<char> read_file(const std::string &filename) {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -531,12 +564,17 @@ public:
 
     VkPipelineVertexInputStateCreateInfo vertex_input_info{};
 
+    auto binding_description = Vertex::get_binding_description();
+    auto attribute_descriptions = Vertex::get_attribute_descriptions();
+
     vertex_input_info.sType =
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input_info.vertexBindingDescriptionCount = 0;
-    vertex_input_info.pVertexBindingDescriptions = nullptr;
-    vertex_input_info.vertexAttributeDescriptionCount = 0;
-    vertex_input_info.pVertexAttributeDescriptions = nullptr;
+    vertex_input_info.vertexBindingDescriptionCount = 1;
+    vertex_input_info.pVertexBindingDescriptions = &binding_description;
+    vertex_input_info.vertexAttributeDescriptionCount =
+        attribute_descriptions.size();
+    vertex_input_info.pVertexAttributeDescriptions =
+        attribute_descriptions.data();
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly_info{};
 
@@ -699,6 +737,69 @@ public:
                 "Couldn't create command pool");
   }
 
+  void create_vertex_buffer(std::vector<Vertex> vertices) {
+    VkBufferCreateInfo buffer_info{};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = sizeof(vertices[0]) * vertices.size();
+    buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    ZEPH_ENSURE(vkCreateBuffer(m_logical_device.handle, &buffer_info, nullptr,
+                               &m_vertex_buffer)
+
+                    != VK_SUCCESS,
+                "Couldn't create vertex buffer")
+
+    VkMemoryRequirements mem_requirements;
+
+    vkGetBufferMemoryRequirements(m_logical_device.handle, m_vertex_buffer,
+                                  &mem_requirements);
+
+    VkMemoryAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_requirements.size;
+    alloc_info.memoryTypeIndex =
+        find_memory_type(mem_requirements.memoryTypeBits,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    ZEPH_ENSURE(vkAllocateMemory(m_logical_device.handle, &alloc_info, nullptr,
+                                 &m_vertex_buffer_memory) != VK_SUCCESS,
+                "Couldn't allocate vertex buffer memory");
+
+    vkBindBufferMemory(m_logical_device.handle, m_vertex_buffer,
+                       m_vertex_buffer_memory, 0);
+
+    void *data;
+    vkMapMemory(m_logical_device.handle, m_vertex_buffer_memory, 0,
+                buffer_info.size, 0, &data);
+
+    memcpy(data, vertices.data(), buffer_info.size);
+
+    vkUnmapMemory(m_logical_device.handle, m_vertex_buffer_memory);
+  }
+
+  uint32_t find_memory_type(uint32_t type_filter,
+                            VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memory_properties;
+
+    vkGetPhysicalDeviceMemoryProperties(m_physical_device.handle,
+                                        &memory_properties);
+
+    for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++) {
+      auto mem_type_property_flags =
+          memory_properties.memoryTypes[i].propertyFlags;
+
+      auto has_flags = (mem_type_property_flags & properties) == properties;
+
+      if (type_filter & (1 << i) && has_flags) {
+        return i;
+      }
+    }
+
+    ZEPH_EXCEPTION("Couldn't find suitable memory type");
+  }
+
   void create_command_buffers() {
     m_command_buffers.resize(MAX_FRAMES_IN_FLIGHT);
 
@@ -715,7 +816,8 @@ public:
                 "Couldn't allocate command buffer");
   }
 
-  void push_command_buffer(VkCommandBuffer command_buffer, uint32_t image_index,
+  void push_command_buffer(VkCommandBuffer command_buffer,
+                           std::vector<Vertex> vertices, uint32_t image_index,
                            uint32_t frame_index) {
     VkCommandBufferBeginInfo begin_info{};
 
@@ -745,6 +847,11 @@ public:
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       m_graphics_pipeline);
 
+    VkBuffer vertex_buffers[] = {m_vertex_buffer};
+    VkDeviceSize offsets[] = {0};
+
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
+
     VkViewport viewport{};
 
     viewport.x = 0.0f;
@@ -763,7 +870,7 @@ public:
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-    vkCmdDraw(command_buffer, 3, 1, 0, 0);
+    vkCmdDraw(command_buffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
     vkCmdEndRenderPass(command_buffer);
 
@@ -1143,6 +1250,9 @@ public:
   void cleanup() {
     cleanup_swap_chain(m_swap_chain, true);
 
+    vkDestroyBuffer(m_logical_device.handle, m_vertex_buffer, nullptr);
+    vkFreeMemory(m_logical_device.handle, m_vertex_buffer_memory, nullptr);
+
     vkDestroyPipeline(m_logical_device.handle, m_graphics_pipeline, nullptr);
     vkDestroyPipelineLayout(m_logical_device.handle, m_pipeline_layout,
                             nullptr);
@@ -1203,6 +1313,9 @@ private:
   std::vector<VkFence> m_in_flight_fences;
 
   const uint8_t MAX_FRAMES_IN_FLIGHT = 2;
+
+  VkBuffer m_vertex_buffer;
+  VkDeviceMemory m_vertex_buffer_memory;
 };
 
 } // namespace zephyr
