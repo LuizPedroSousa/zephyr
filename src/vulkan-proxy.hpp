@@ -2,6 +2,7 @@
 
 namespace zephyr {
 
+#ifdef ENABLE_VALIDATION_LAYER
 static VkResult create_debug_utils_messenger_ext(
     VkInstance instance,
     const VkDebugUtilsMessengerCreateInfoEXT *p_create_info,
@@ -28,5 +29,6 @@ destroy_debug_utils_messenger_ext(VkInstance instance,
     func(instance, debug_messenger, p_allocator);
   }
 }
+#endif
 
 } // namespace zephyr

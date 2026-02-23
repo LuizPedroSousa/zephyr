@@ -18,7 +18,9 @@ public:
     m_window.open("Zephyr", 1920, 1080);
 
     m_vulkan.create_instance();
+#ifdef ENABLE_VALIDATION_LAYER
     m_vulkan.create_debug_messenger();
+#endif
     m_vulkan.create_surface(m_window.handle());
     m_vulkan.pick_physical_device();
     m_vulkan.create_logical_device();

@@ -138,26 +138,29 @@ public:
     auto extensions = get_required_extensions();
 
     ZEPH_ENSURE(!ensure_extensions_support(extensions),
-                "Validation Layer not available");
+                " Required extensions not available");
 
+#ifdef ENABLE_VALIDATION_LAYER
     const std::vector<const char *> validation_layers = {
         "VK_LAYER_KHRONOS_validation"};
 
     ZEPH_ENSURE(!ensure_validation_layers_support(validation_layers),
                 "Validation Layer not available");
-
-    VkDebugUtilsMessengerCreateInfoEXT debug_create_info =
-        declare_debug_messenger();
+#endif
 
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instance_info.pApplicationInfo = &app_info;
     instance_info.enabledExtensionCount =
         static_cast<uint32_t>(extensions.size());
     instance_info.ppEnabledExtensionNames = extensions.data();
-    instance_info.pNext = &debug_create_info;
 
+#ifdef ENABLE_VALIDATION_LAYER
+    VkDebugUtilsMessengerCreateInfoEXT debug_create_info =
+        declare_debug_messenger();
+    instance_info.pNext = &debug_create_info;
     instance_info.enabledLayerCount = validation_layers.size();
     instance_info.ppEnabledLayerNames = validation_layers.data();
+#endif
 
     instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 
@@ -230,11 +233,13 @@ public:
   }
 
   void create_logical_device() {
+
+#ifdef ENABLE_VALIDATION_LAYER
     const std::vector<const char *> validation_layers = {
         "VK_LAYER_KHRONOS_validation"};
-
     ZEPH_ENSURE(!ensure_validation_layers_support(validation_layers),
                 "Validation Layer not available");
+#endif
 
     std::set<uint32_t> unique_queue_families = {
         m_physical_device.queue_family_indices.graphics_family.value(),
@@ -270,8 +275,10 @@ public:
     create_info.enabledExtensionCount = m_physical_device.extensions.size();
     create_info.ppEnabledExtensionNames = m_physical_device.extensions.data();
 
+#ifdef ENABLE_VALIDATION_LAYER
     create_info.enabledLayerCount = validation_layers.size();
     create_info.ppEnabledLayerNames = validation_layers.data();
+#endif
 
     VkDevice logical_device_handle;
 
@@ -1203,50 +1210,26 @@ public:
     return app_info;
   }
 
-  void create_debug_messenger() {
-    ZEPH_ENSURE(m_instance == nullptr,
-                "Instance must be created before debug_messenger");
-
-    VkDebugUtilsMessengerCreateInfoEXT create_info = declare_debug_messenger();
-
-    ZEPH_ENSURE(create_debug_utils_messenger_ext(m_instance, &create_info,
-                                                 nullptr, &m_debug_messenger) !=
-                    VK_SUCCESS,
-                "Couldn't create debug messenger");
-  };
-
-  VkDebugUtilsMessengerCreateInfoEXT declare_debug_messenger() {
-    VkDebugUtilsMessengerCreateInfoEXT create_info{};
-
-    create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    create_info.messageSeverity =
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-
-    create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                              VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                              VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-
-    create_info.pfnUserCallback = debug_callback;
-    create_info.pUserData = nullptr;
-
-    return create_info;
-  };
-
   std::vector<const char *> get_required_extensions() {
     uint32_t glfw_extension_count = 0;
 
     const char **glfw_extensions =
         glfwGetRequiredInstanceExtensions(&glfw_extension_count);
 
+    ZEPH_ENSURE(glfw_extensions == nullptr,
+                "Couldn't get GLFW required extensions");
+
     std::vector<const char *> required_extensions(
         glfw_extensions, glfw_extensions + glfw_extension_count);
 
+#if defined(__APPLE__)
     required_extensions.emplace_back(
         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
 
+#ifdef ENABLE_VALIDATION_LAYER
     required_extensions.emplace_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#endif
 
     return required_extensions;
   }
@@ -1280,6 +1263,38 @@ public:
 
     return true;
   }
+
+#ifdef ENABLE_VALIDATION_LAYER
+  void create_debug_messenger() {
+    ZEPH_ENSURE(m_instance == nullptr,
+                "Instance must be created before debug_messenger");
+
+    VkDebugUtilsMessengerCreateInfoEXT create_info = declare_debug_messenger();
+
+    ZEPH_ENSURE(create_debug_utils_messenger_ext(m_instance, &create_info,
+                                                 nullptr, &m_debug_messenger) !=
+                    VK_SUCCESS,
+                "Couldn't create debug messenger");
+  };
+
+  VkDebugUtilsMessengerCreateInfoEXT declare_debug_messenger() {
+    VkDebugUtilsMessengerCreateInfoEXT create_info{};
+
+    create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    create_info.messageSeverity =
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+
+    create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                              VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                              VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+
+    create_info.pfnUserCallback = debug_callback;
+    create_info.pUserData = nullptr;
+
+    return create_info;
+  };
 
   bool
   ensure_validation_layers_support(const std::vector<const char *> &layers) {
@@ -1319,6 +1334,7 @@ public:
 
     return VK_FALSE;
   };
+#endif
 
   void cleanup() {
     cleanup_swap_chain(m_swap_chain, true);
@@ -1341,7 +1357,9 @@ public:
     vkDestroyCommandPool(m_logical_device.handle, m_command_pool, nullptr);
 
     vkDestroyDevice(m_logical_device.handle, nullptr);
+#ifdef ENABLE_VALIDATION_LAYER
     destroy_debug_utils_messenger_ext(m_instance, m_debug_messenger, nullptr);
+#endif
     vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
     vkDestroyInstance(m_instance, nullptr);
   };
@@ -1366,7 +1384,9 @@ public:
 
 private:
   VkInstance m_instance;
+#ifdef ENABLE_VALIDATION_LAYER
   VkDebugUtilsMessengerEXT m_debug_messenger;
+#endif
   PhysicalDevice m_physical_device;
   LogicalDevice m_logical_device;
 
