@@ -737,46 +737,119 @@ public:
                 "Couldn't create command pool");
   }
 
-  void create_vertex_buffer(std::vector<Vertex> vertices) {
+  void create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                     VkMemoryPropertyFlags properties, VkBuffer &buffer,
+                     VkDeviceMemory &mem_buffer) {
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = sizeof(vertices[0]) * vertices.size();
-    buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    buffer_info.size = size;
+    buffer_info.usage = usage;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    ZEPH_ENSURE(vkCreateBuffer(m_logical_device.handle, &buffer_info, nullptr,
-                               &m_vertex_buffer)
+    ZEPH_ENSURE(
+        vkCreateBuffer(m_logical_device.handle, &buffer_info, nullptr, &buffer)
 
-                    != VK_SUCCESS,
-                "Couldn't create vertex buffer")
+            != VK_SUCCESS,
+        "Couldn't create vertex buffer")
 
     VkMemoryRequirements mem_requirements;
 
-    vkGetBufferMemoryRequirements(m_logical_device.handle, m_vertex_buffer,
+    vkGetBufferMemoryRequirements(m_logical_device.handle, buffer,
                                   &mem_requirements);
 
     VkMemoryAllocateInfo alloc_info{};
     alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_requirements.size;
     alloc_info.memoryTypeIndex =
-        find_memory_type(mem_requirements.memoryTypeBits,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        find_memory_type(mem_requirements.memoryTypeBits, properties);
 
     ZEPH_ENSURE(vkAllocateMemory(m_logical_device.handle, &alloc_info, nullptr,
-                                 &m_vertex_buffer_memory) != VK_SUCCESS,
+                                 &mem_buffer) != VK_SUCCESS,
                 "Couldn't allocate vertex buffer memory");
 
-    vkBindBufferMemory(m_logical_device.handle, m_vertex_buffer,
-                       m_vertex_buffer_memory, 0);
+    vkBindBufferMemory(m_logical_device.handle, buffer, mem_buffer, 0);
+  }
+
+  void create_vertex_buffer(std::vector<Vertex> vertices) {
+    VkDeviceSize buffer_size = sizeof(vertices[0]) * vertices.size();
+
+    VkBuffer staging_buffer;
+    VkDeviceMemory staging_memory_buffer;
+
+    create_buffer(buffer_size,
+                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                  staging_buffer, staging_memory_buffer);
 
     void *data;
-    vkMapMemory(m_logical_device.handle, m_vertex_buffer_memory, 0,
-                buffer_info.size, 0, &data);
 
-    memcpy(data, vertices.data(), buffer_info.size);
+    vkMapMemory(m_logical_device.handle, staging_memory_buffer, 0,
+                (size_t)buffer_size, 0, &data);
 
-    vkUnmapMemory(m_logical_device.handle, m_vertex_buffer_memory);
+    memcpy(data, vertices.data(), buffer_size);
+
+    vkUnmapMemory(m_logical_device.handle, staging_memory_buffer);
+
+    create_buffer(buffer_size,
+                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_vertex_buffer,
+                  m_vertex_buffer_memory);
+
+    copy_buffer(staging_buffer, m_vertex_buffer, buffer_size);
+
+    vkDestroyBuffer(m_logical_device.handle, staging_buffer, nullptr);
+    vkFreeMemory(m_logical_device.handle, staging_memory_buffer, nullptr);
+  }
+
+  void copy_buffer(VkBuffer source_buffer, VkBuffer destination_buffer,
+                   VkDeviceSize size) {
+    VkCommandBufferAllocateInfo allocate_info{};
+
+    allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocate_info.commandPool = m_command_pool;
+    allocate_info.commandBufferCount = 1;
+
+    VkCommandBuffer command_buffer;
+
+    ZEPH_ENSURE(
+
+        vkAllocateCommandBuffers(m_logical_device.handle, &allocate_info,
+                                 &command_buffer) != VK_SUCCESS,
+        "Couldn't allocate command buffer");
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(command_buffer, &begin_info);
+
+    VkBufferCopy copy_region{};
+
+    copy_region.srcOffset = 0;
+    copy_region.dstOffset = 0;
+    copy_region.size = size;
+
+    vkCmdCopyBuffer(command_buffer, source_buffer, destination_buffer, 1,
+                    &copy_region);
+
+    vkEndCommandBuffer(command_buffer);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+
+    vkQueueSubmit(m_logical_device.graphics_queue, 1, &submit_info,
+                  VK_NULL_HANDLE);
+
+    vkQueueWaitIdle(m_logical_device.graphics_queue);
+
+    vkFreeCommandBuffers(m_logical_device.handle, m_command_pool, 1,
+                         &command_buffer);
   }
 
   uint32_t find_memory_type(uint32_t type_filter,
