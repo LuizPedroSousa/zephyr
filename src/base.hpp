@@ -1,5 +1,6 @@
 #pragma once
 
+#include "memory"
 #include <cstdint>
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -13,10 +14,20 @@
 #define BACKEND_VULKAN 1
 #define BACKEND_OPENGL 2
 
-#include <stdexcept>
-
 namespace zephyr {
 
 using VertexIndice = uint32_t;
+
+template <typename T> using Scope = std::unique_ptr<T>;
+template <typename T, typename... Args>
+constexpr Scope<T> create_scope(Args &&...args) {
+  return std::make_unique<T>(std::forward<Args>(args)...);
+};
+
+template <typename T> using Ref = std::shared_ptr<T>;
+template <typename T, typename... Args>
+constexpr Ref<T> create_ref(Args &&...args) {
+  return std::make_shared<T>(std::forward<Args>(args)...);
+};
 
 } // namespace zephyr

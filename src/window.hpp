@@ -25,7 +25,7 @@ public:
     glfwSetFramebufferSizeCallback(m_handle, resize_callback);
   }
 
-  GLFWwindow *handle() { return m_handle; }
+  inline GLFWwindow *handle() const { return m_handle; }
 
   bool is_resized() const { return m_is_resized; }
   void set_is_resized(bool value) { m_is_resized = value; }

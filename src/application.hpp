@@ -1,11 +1,11 @@
 #pragma once
 
 #include "assert.hpp"
+#include "base.hpp"
 #include "entity.hpp"
 #include "mesh.hpp"
-#include "vulkan.hpp"
+#include "platforms/vulkan/render-target.hpp"
 #include "window.hpp"
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <vulkan/vulkan_core.h>
@@ -14,32 +14,15 @@ namespace zephyr {
 
 class Application {
 public:
-  Application() : m_window(Window()), m_vulkan(Vulkan()) {}
+  Application() : m_window(Window()) {}
 
   void init() {
     m_window.open("Zephyr", 1920, 1080);
 
-    m_vulkan.create_instance();
-#ifdef ENABLE_VALIDATION_LAYER
-    m_vulkan.create_debug_messenger();
-#endif
-    m_vulkan.create_surface(m_window.handle());
-    m_vulkan.pick_physical_device();
-    m_vulkan.create_logical_device();
-    m_vulkan.create_swap_chain(m_window.handle());
-    m_vulkan.create_image_views();
-    m_vulkan.create_render_pass();
-    m_vulkan.create_descriptor_set_layout();
-    m_vulkan.create_graphics_pipeline();
-    m_vulkan.create_framebuffers();
-    m_vulkan.create_command_pool();
-    m_vulkan.create_vertex_buffer(m_mesh.vertices);
-    m_vulkan.create_index_buffer(m_mesh.indices);
-    m_vulkan.create_uniform_buffers<EntityUniformBuffer>();
-    m_vulkan.create_descriptor_pool();
-    m_vulkan.create_descriptor_sets<EntityUniformBuffer>();
-    m_vulkan.create_command_buffers();
-    m_vulkan.create_sync_objects();
+    m_vulkan_render_target = create_scope<VulkanRenderTarget>();
+    m_vulkan_render_target->init(m_window);
+    m_vulkan_render_target->create_vertex_buffer(m_mesh.vertices);
+    m_vulkan_render_target->create_index_buffer(m_mesh.indices);
   }
 
   void run() {
@@ -48,17 +31,19 @@ public:
       draw();
     }
 
-    vkDeviceWaitIdle(m_vulkan.logical_device().handle);
+    vkDeviceWaitIdle(m_vulkan_render_target->logical_device().handle);
   }
 
   void draw() {
-    auto logical_device = m_vulkan.logical_device();
-    auto swap_chain = m_vulkan.swap_chain();
+    auto logical_device = m_vulkan_render_target->logical_device();
+    auto swap_chain = m_vulkan_render_target->swap_chain();
 
-    auto image_available_semaphores = m_vulkan.image_available_semaphores();
-    auto render_finished_semaphores = m_vulkan.render_finished_semaphores();
-    auto in_flight_fences = m_vulkan.in_flight_fences();
-    auto command_buffers = m_vulkan.command_buffers();
+    auto image_available_semaphores =
+        m_vulkan_render_target->image_available_semaphores();
+    auto render_finished_semaphores =
+        m_vulkan_render_target->render_finished_semaphores();
+    auto in_flight_fences = m_vulkan_render_target->in_flight_fences();
+    auto command_buffers = m_vulkan_render_target->command_buffers();
 
     vkWaitForFences(logical_device.handle, 1,
                     &in_flight_fences[m_current_frame], VK_TRUE, UINT64_MAX);
@@ -73,7 +58,7 @@ public:
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
         m_window.is_resized()) {
       m_window.set_is_resized(false);
-      m_vulkan.recreate_swap_chain(m_window.handle());
+      m_vulkan_render_target->recreate_swap_chain(m_window);
       return;
     } else {
       ZEPH_ENSURE(result != VK_SUCCESS, "Couldn't acquire swap chain image");
@@ -84,8 +69,8 @@ public:
     vkResetCommandBuffer(command_buffers[m_current_frame], 0);
     update_uniform_buffer(swap_chain);
 
-    m_vulkan.push_command_buffer(command_buffers[m_current_frame], m_mesh,
-                                 image_index, m_current_frame);
+    m_vulkan_render_target->push_command_buffer(
+        command_buffers[m_current_frame], m_mesh, image_index, m_current_frame);
 
     VkSubmitInfo submit_info{};
 
@@ -126,10 +111,11 @@ public:
 
     vkQueuePresentKHR(logical_device.present_queue, &present_info);
 
-    m_current_frame = (m_current_frame + 1) % m_vulkan.max_frames_in_flight();
+    m_current_frame =
+        (m_current_frame + 1) % m_vulkan_render_target->max_frames_in_flight();
   }
 
-  void update_uniform_buffer(SwapChain swap_chain) {
+  void update_uniform_buffer(VulkanSwapChain swap_chain) {
     static auto startTime = std::chrono::high_resolution_clock::now();
 
     auto currentTime = std::chrono::high_resolution_clock::now();
@@ -153,19 +139,19 @@ public:
     uniform.projection[1][1] *= -1;
 #endif
 
-    auto uniform_buffers_mapped = m_vulkan.uniform_buffers_mapped();
+    auto uniform_buffers = m_vulkan_render_target->uniform_buffers();
 
-    memcpy(uniform_buffers_mapped[m_current_frame], &uniform, sizeof(uniform));
+    memcpy(uniform_buffers[m_current_frame].mapped, &uniform, sizeof(uniform));
   }
 
   ~Application() {
-    m_vulkan.cleanup();
+    m_vulkan_render_target->cleanup();
     m_window.cleanup();
   }
 
 private:
   Window m_window;
-  Vulkan m_vulkan;
+  Scope<VulkanRenderTarget> m_vulkan_render_target;
   uint32_t m_current_frame = 0;
 
   Mesh m_mesh = Mesh::cube();

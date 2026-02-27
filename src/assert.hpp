@@ -1,4 +1,5 @@
 #pragma once
+#include "exception.hpp"
 
 namespace zephyr {
 #define ZEPH_ASSERT(EXPRESSION, MESSAGE)                                       \
