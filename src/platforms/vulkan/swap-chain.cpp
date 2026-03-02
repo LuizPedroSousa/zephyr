@@ -5,10 +5,20 @@
 
 namespace zephyr {
 
-VulkanSwapChain VulkanSwapChain::create(
-    const Window window, VulkanPhysicalDevice physical_device,
-    VulkanLogicalDevice logical_device, const VulkanSurface surface,
-    std::optional<VulkanSwapChain> existent_chain) {
+VulkanSwapChain
+VulkanSwapChain::create(Window *window, VulkanPhysicalDevice &physical_device,
+                        VulkanLogicalDevice logical_device,
+                        const VulkanSurface surface,
+                        std::optional<VulkanSwapChain> existent_chain) {
+
+  if (window->width() != physical_device.swap_chain_support.capabilities
+                             .minImageExtent.width ||
+      window->height() != physical_device.swap_chain_support.capabilities
+                              .minImageExtent.height) {
+    physical_device.swap_chain_support =
+        VulkanSwapChain::find_support(surface.handle(), physical_device.handle);
+  }
+
   auto surface_format = VulkanSwapChainPicker::choose_surface_format(
       physical_device.swap_chain_support.formats);
 
@@ -16,7 +26,7 @@ VulkanSwapChain VulkanSwapChain::create(
       physical_device.swap_chain_support.preset_modes);
 
   auto extent = VulkanSwapChainPicker::choose_extent(
-      window.handle(), physical_device.swap_chain_support.capabilities);
+      window->handle(), physical_device.swap_chain_support.capabilities);
 
   uint32_t image_count =
       physical_device.swap_chain_support.capabilities.minImageCount + 1;
@@ -71,7 +81,12 @@ VulkanSwapChain VulkanSwapChain::create(
 
   if (existent_chain.has_value() && existent_chain.value().is_handle_valid()) {
     create_info.oldSwapchain = existent_chain.value().handle;
+
     retired_chain_handles.push_back(existent_chain.value().handle);
+
+    const auto &prev_retired = existent_chain.value().retired_chain_handles;
+    retired_chain_handles.insert(retired_chain_handles.end(),
+                                 prev_retired.begin(), prev_retired.end());
   } else {
     create_info.oldSwapchain = VK_NULL_HANDLE;
   }

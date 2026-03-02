@@ -88,7 +88,7 @@ public:
   };
 
   static VulkanSwapChain
-  create(const Window window, VulkanPhysicalDevice physical_device,
+  create(Window *window, VulkanPhysicalDevice &physical_device,
          VulkanLogicalDevice logical_device, const VulkanSurface surface,
          std::optional<VulkanSwapChain> existent_chain = std::nullopt);
 
@@ -132,7 +132,9 @@ struct VulkanSwapChainPicker {
                 const VkSurfaceCapabilitiesKHR &capabilities) {
 
     if (capabilities.currentExtent.width !=
-        std::numeric_limits<uint32_t>::max()) {
+            std::numeric_limits<uint32_t>::max() &&
+        capabilities.currentExtent.height !=
+            std::numeric_limits<uint32_t>::max()) {
       return capabilities.currentExtent;
     }
 
