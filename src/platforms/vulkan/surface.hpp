@@ -15,10 +15,10 @@ public:
   VulkanSurface(VkInstance instance, VkSurfaceKHR surface)
       : m_instance(instance), m_handle(surface) {}
 
-  static VulkanSurface create(const VulkanInstance &instance, Window window) {
+  static VulkanSurface create(const VulkanInstance &instance, Window *window) {
     VkSurfaceKHR handle;
 
-    ZEPH_ENSURE(glfwCreateWindowSurface(instance.handle(), window.handle(),
+    ZEPH_ENSURE(glfwCreateWindowSurface(instance.handle(), window->handle(),
                                         nullptr, &handle) != VK_SUCCESS,
                 "Coudln't create instance");
 

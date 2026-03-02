@@ -1,10 +1,10 @@
 #pragma once
 
 #include "entity.hpp"
-#include "file.hpp"
 #include "mesh.hpp"
 #include "platforms/vulkan/buffer.hpp"
 #include "platforms/vulkan/command-buffer.hpp"
+#include "platforms/vulkan/command-pool.hpp"
 #include "platforms/vulkan/descriptor-set.hpp"
 #include "platforms/vulkan/device.hpp"
 #include "platforms/vulkan/fence.hpp"
@@ -16,6 +16,7 @@
 #include "platforms/vulkan/surface.hpp"
 #include "platforms/vulkan/swap-chain.hpp"
 #include "window.hpp"
+#include <iterator>
 #include <regex>
 
 #ifdef ENABLE_VALIDATION_LAYER
@@ -49,7 +50,7 @@ public:
   VulkanRenderTarget() = default;
   ~VulkanRenderTarget() = default;
 
-  void init(Window window) {
+  void init(Window *window) {
     m_instance = VulkanInstance::create();
     m_surface = VulkanSurface::create(m_instance, window);
     m_physical_device = VulkanPhysicalDevicePicker::pick(m_instance, m_surface);
@@ -66,25 +67,18 @@ public:
         VulkanDescriptorSetLayout::create(0, 1, m_logical_device);
 
     m_graphics_pipeline = VulkanGraphicsPipeline::create(
-        m_logical_device, m_swap_chain, m_descriptor_set_layout, m_render_pass);
+        m_logical_device, m_swap_chain, m_descriptor_set_layout, m_render_pass,
+        {
+            .vert_path = "assets/shaders/shader.vert.spv",
+            .frag_path = "assets/shaders/shader.frag.spv",
+            .alpha_blend = true,
+        });
 
     VulkanSwapChain::create_framebuffers(m_logical_device, m_swap_chain,
                                          m_render_pass);
 
-    create_command_pool();
-    create_uniform_buffers<EntityUniformBuffer>();
-
-    m_descriptor_pool =
-        VulkanDescriptorPool::create(m_uniform_buffers.size(), m_logical_device)
-            .handle;
-
-    m_descriptor_sets = VulkanDescriptorSet::create<EntityUniformBuffer>(
-                            m_logical_device, m_descriptor_set_layout,
-                            m_descriptor_pool, m_uniform_buffers)
-                            .handles();
-
-    create_command_buffers();
-    create_sync_objects();
+    m_command_pool =
+        VulkanCommandPool::make(m_logical_device, m_physical_device);
   }
 
   void cleanup_semaphores() {
@@ -98,7 +92,7 @@ public:
     }
   }
 
-  void recreate_swap_chain(Window window) {
+  void recreate_swap_chain(Window *window) {
     vkDeviceWaitIdle(m_logical_device.handle);
 
     for (auto framebuffer : m_swap_chain.framebuffers) {
@@ -117,6 +111,8 @@ public:
     m_swap_chain = VulkanSwapChain::create(
         window, m_physical_device, m_logical_device, m_surface, m_swap_chain);
 
+    VulkanSwapChain::create_image_views(m_logical_device.handle, m_swap_chain);
+
     VulkanSwapChain::create_framebuffers(m_logical_device, m_swap_chain,
                                          m_render_pass);
 
@@ -129,19 +125,6 @@ public:
       m_swap_chain.retired_chain_handles.erase(
           m_swap_chain.retired_chain_handles.begin());
     }
-  }
-
-  void create_command_pool() {
-    VkCommandPoolCreateInfo create_info{};
-
-    create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    create_info.queueFamilyIndex =
-        m_physical_device.queue_family_indices.graphics_family.value();
-
-    ZEPH_ENSURE(vkCreateCommandPool(m_logical_device.handle, &create_info,
-                                    nullptr, &m_command_pool) != VK_SUCCESS,
-                "Couldn't create command pool");
   }
 
   void create_vertex_buffer(std::vector<Vertex> vertices) {
@@ -199,46 +182,66 @@ public:
     staging_buffer.cleanup();
   }
 
-  template <typename T> void create_uniform_buffers() {
-    VkDeviceSize buffer_size = sizeof(T);
+  template <typename T> void setup_uniform_buffer_slots(size_t slots_count) {
+    m_uniform_buffers_slots_count = slots_count;
+
+    VkPhysicalDeviceProperties props;
+
+    vkGetPhysicalDeviceProperties(m_physical_device.handle, &props);
+
+    m_ubo_aligned_stride =
+        aligned_stride(sizeof(T), props.limits.minUniformBufferOffsetAlignment);
+
+    VkDeviceSize buffer_size = slots_count * m_ubo_aligned_stride;
 
     m_uniform_buffers.resize(MAX_FRAMES_IN_FLIGHT);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      auto staging_buffer = VulkanBuffer::TransientStagingRegion::make(
+      auto buffer = VulkanBuffer::TransientStagingRegion::make(
           m_logical_device, buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
-      staging_buffer.allocate(m_physical_device,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      buffer.allocate(m_physical_device,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      buffer.map();
 
-      staging_buffer.map();
-
-      m_uniform_buffers[i] = staging_buffer;
+      m_uniform_buffers[i] = buffer;
     }
   }
 
-  void create_command_buffers() {
-    m_command_buffers.resize(MAX_FRAMES_IN_FLIGHT);
-
-    VkCommandBufferAllocateInfo alloc_info =
-        VulkanCommandBuffer::declare_allocate(m_command_buffers.size(),
-                                              m_command_pool);
-
-    ZEPH_ENSURE(vkAllocateCommandBuffers(m_logical_device.handle, &alloc_info,
-                                         m_command_buffers.data()) !=
-                    VK_SUCCESS,
-                "Couldn't allocate command buffer");
+  void create_descriptor_pool() {
+    m_descriptor_pool =
+        VulkanDescriptorPool::create(m_uniform_buffers.size(), m_logical_device)
+            .handle;
   }
 
-  void push_command_buffer(VkCommandBuffer command_buffer, Mesh mesh,
-                           uint32_t image_index, uint32_t frame_index) {
-    VkCommandBufferBeginInfo begin_info = VulkanCommandBuffer::declare_begin(0);
+  template <typename T> void setup_descriptor_sets() {
 
-    // begin_info.pInheritanceInfo = nullptr;
+    m_descriptor_sets =
+        VulkanDescriptorSet::create<T>(
+            m_logical_device, m_descriptor_set_layout, m_descriptor_pool,
+            m_uniform_buffers, m_texture_region.image_view,
+            m_texture_region.sampler)
+            .handles();
+  }
 
-    ZEPH_ENSURE(vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS,
-                "Couldn't begin to push command buffer");
+  template <typename T>
+  void dispatch_uniform_buffer(T uniform, uint32_t slot,
+                               uint32_t current_frame) {
+
+    auto *dst = static_cast<char *>(m_uniform_buffers[current_frame].mapped) +
+                slot * m_ubo_aligned_stride;
+
+    memcpy(dst, &uniform, sizeof(uniform));
+  }
+
+  void create_command_buffers() {
+    m_command_pool.allocate(MAX_FRAMES_IN_FLIGHT);
+  }
+
+  void begin_frame(VkCommandBuffer command_buffer, uint32_t image_index) {
+
+    VulkanCommandBuffer::begin_command_buffer(command_buffer);
 
     VkRenderPassBeginInfo render_pass_info = VulkanRenderPass::declare_begin(
         m_render_pass.handle, m_swap_chain.framebuffers[image_index],
@@ -249,14 +252,6 @@ public:
 
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       m_graphics_pipeline.handle());
-
-    VkBuffer vertex_buffers[] = {m_vertex_region.buffer};
-    VkDeviceSize offsets[] = {0};
-
-    vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
-
-    vkCmdBindIndexBuffer(command_buffer, m_index_region.buffer, 0,
-                         VK_INDEX_TYPE_UINT32);
 
     VkViewport viewport{};
 
@@ -275,19 +270,33 @@ public:
     scissor.extent = m_swap_chain.extent;
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+  }
+
+  void draw_indexed(VkCommandBuffer command_buffer, Mesh mesh,
+                    uint32_t frame_index, uint32_t slot) {
+    VkBuffer vertex_buffers[] = {m_vertex_region.buffer};
+    VkDeviceSize offsets[] = {0};
+
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
+
+    vkCmdBindIndexBuffer(command_buffer, m_index_region.buffer, 0,
+                         VK_INDEX_TYPE_UINT32);
+
+    auto dynamic_offset = static_cast<uint32_t>(slot * m_ubo_aligned_stride);
 
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_graphics_pipeline.layout(), 0, 1,
-                            &m_descriptor_sets[frame_index], 0, nullptr);
+                            &m_descriptor_sets[frame_index], 1,
+                            &dynamic_offset);
 
     vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(mesh.indices.size()),
                      1, 0, 0, 0);
+  }
 
+  void end_frame(VkCommandBuffer command_buffer) {
     vkCmdEndRenderPass(command_buffer);
 
-    ZEPH_ENSURE(vkEndCommandBuffer(m_command_buffers[frame_index]) !=
-                    VK_SUCCESS,
-                "Couldn't create shader");
+    VulkanCommandBuffer::end_command_buffer(command_buffer);
   }
 
   void create_semaphores() {
@@ -326,9 +335,53 @@ public:
     }
   }
 
+  void create_texture_image(std::string path) {
+    int texture_width, texture_height, texture_channel;
+
+    stbi_uc *pixels = stbi_load(path.c_str(), &texture_width, &texture_height,
+                                &texture_channel, STBI_rgb_alpha);
+
+    VkDeviceSize image_size = texture_width * texture_height * 4;
+
+    ZEPH_ENSURE(!pixels, "Couldn't load texture image");
+
+    auto staging_buffer = VulkanBuffer::TransientStagingRegion::make(
+        m_logical_device, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+
+    staging_buffer.allocate(m_physical_device,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    staging_buffer.upload(pixels);
+    staging_buffer.unmap();
+
+    stbi_image_free(pixels);
+
+    m_texture_region = VulkanBuffer::VulkanImageRegion::make(
+        m_logical_device, texture_width, texture_height,
+        VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+
+    m_texture_region.allocate(m_physical_device,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    m_texture_region.transition_layout(m_logical_device.graphics_queue,
+                                       m_command_pool,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    m_texture_region.copy_to_image(
+        staging_buffer, m_logical_device.graphics_queue, m_command_pool);
+
+    m_texture_region.transition_layout(
+        m_logical_device.graphics_queue, m_command_pool,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    staging_buffer.cleanup();
+  }
+
   void cleanup() {
     m_swap_chain.cleanup();
 
+    m_texture_region.cleanup();
     m_vertex_region.cleanup();
     m_index_region.cleanup();
 
@@ -350,9 +403,9 @@ public:
       vkDestroyFence(m_logical_device.handle, m_in_flight_fences[i], nullptr);
     }
 
-    vkDestroyCommandPool(m_logical_device.handle, m_command_pool, nullptr);
+    m_command_pool.cleanup();
 
-    vkDestroyDevice(m_logical_device.handle, nullptr);
+    m_logical_device.cleanup();
 
     m_surface.cleanup();
     m_instance.cleanup();
@@ -362,7 +415,9 @@ public:
   VulkanSwapChain swap_chain() const { return m_swap_chain; }
   std::vector<VkFence> in_flight_fences() { return m_in_flight_fences; }
 
-  std::vector<VkCommandBuffer> command_buffers() { return m_command_buffers; }
+  std::vector<VkCommandBuffer> command_buffers() {
+    return m_command_pool.commands;
+  }
 
   std::vector<VkSemaphore> image_available_semaphores() {
     return m_image_available_semaphores;
@@ -382,6 +437,10 @@ public:
   }
 
 private:
+  static VkDeviceSize aligned_stride(VkDeviceSize size, VkDeviceSize aligment) {
+    return (size + aligment - 1) & ~(aligment - 1);
+  }
+
   VulkanInstance m_instance;
   VulkanPhysicalDevice m_physical_device;
   VulkanLogicalDevice m_logical_device;
@@ -391,9 +450,7 @@ private:
   VulkanDescriptorSetLayout m_descriptor_set_layout;
   VulkanSwapChain m_swap_chain;
 
-  VkCommandPool m_command_pool;
-
-  std::vector<VkCommandBuffer> m_command_buffers;
+  VulkanCommandPool m_command_pool;
 
   std::vector<VkSemaphore> m_image_available_semaphores;
   std::vector<VkSemaphore> m_render_finished_semaphores;
@@ -404,15 +461,15 @@ private:
   VulkanBuffer::DeviceLocalRegion m_vertex_region;
   VulkanBuffer::DeviceLocalRegion m_index_region;
 
+  VkDeviceSize m_ubo_aligned_stride = 0;
+  size_t m_uniform_buffers_slots_count = 0;
   std::vector<VulkanBuffer::TransientStagingRegion> m_uniform_buffers;
 
   VkDescriptorPool m_descriptor_pool;
 
   std::vector<VkDescriptorSet> m_descriptor_sets;
 
-  VkImage m_texture_image;
-
-  VkDeviceMemory m_texture_image_memory;
+  VulkanBuffer::VulkanImageRegion m_texture_region;
 };
 
 } // namespace zephyr

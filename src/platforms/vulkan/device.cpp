@@ -41,6 +41,7 @@ VulkanLogicalDevice::create(const VulkanPhysicalDevice &physical_device) {
   }
 
   VkPhysicalDeviceFeatures device_features{};
+  device_features.samplerAnisotropy = VK_TRUE;
 
   VkDeviceCreateInfo create_info{};
 

@@ -1,6 +1,8 @@
 #pragma once
 #include "platforms/vulkan/buffer.hpp"
 #include "platforms/vulkan/device.hpp"
+#include "platforms/vulkan/image.hpp"
+#include <vulkan/vulkan_core.h>
 namespace zephyr {
 
 class VulkanDescriptorPool {
@@ -9,18 +11,22 @@ public:
 
   static VulkanDescriptorPool create(uint32_t size,
                                      VulkanLogicalDevice logical_device) {
-    VkDescriptorPoolSize pool_size{};
+    std::array<VkDescriptorPoolSize, 2> pool_sizes{};
 
     VkDescriptorPool handle;
 
-    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_size.descriptorCount = static_cast<uint32_t>(size);
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    pool_sizes[0].descriptorCount = static_cast<uint32_t>(size);
+
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[1].descriptorCount = static_cast<uint32_t>(size);
 
     VkDescriptorPoolCreateInfo create_info{};
 
     create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    create_info.poolSizeCount = 1;
-    create_info.pPoolSizes = &pool_size;
+
+    create_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+    create_info.pPoolSizes = pool_sizes.data();
 
     create_info.maxSets = static_cast<uint32_t>(size);
 
@@ -46,20 +52,33 @@ public:
 
     uniform_buffer_layout_binding.binding = binding;
     uniform_buffer_layout_binding.descriptorType =
-        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     uniform_buffer_layout_binding.descriptorCount = size;
     uniform_buffer_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     uniform_buffer_layout_binding.pImmutableSamplers = nullptr;
 
+    VkDescriptorSetLayoutBinding sampler_buffer_layout_binding{};
+
+    sampler_buffer_layout_binding.binding = 1;
+    sampler_buffer_layout_binding.descriptorType =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sampler_buffer_layout_binding.descriptorCount = size;
+    sampler_buffer_layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    sampler_buffer_layout_binding.pImmutableSamplers = nullptr;
+
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
+        uniform_buffer_layout_binding, sampler_buffer_layout_binding};
+
     VkDescriptorSetLayoutCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    create_info.bindingCount = 1;
-    create_info.pBindings = &uniform_buffer_layout_binding;
+    create_info.bindingCount = static_cast<uint32_t>(bindings.size());
+    create_info.pBindings = bindings.data();
 
     VkDescriptorSetLayout desc_handle;
 
     ZEPH_ENSURE(vkCreateDescriptorSetLayout(logical_device.handle, &create_info,
-                                            nullptr, &desc_handle) != VK_SUCCESS,
+                                            nullptr,
+                                            &desc_handle) != VK_SUCCESS,
                 "Coudln't create descriptor set layout");
 
     return VulkanDescriptorSetLayout(desc_handle, logical_device.handle);
@@ -92,7 +111,9 @@ public:
   create(VulkanLogicalDevice logical_device,
          VulkanDescriptorSetLayout descriptor_set_layout,
          VulkanDescriptorPool descriptor_pool,
-         std::vector<VulkanBuffer::TransientStagingRegion> uniform_buffers) {
+         std::vector<VulkanBuffer::TransientStagingRegion> uniform_buffers,
+         VulkanBuffer::VulkanImageView image_view,
+         VulkanBuffer::VulkanSampler sampler) {
     std::vector<VkDescriptorSet> descriptor_sets;
     descriptor_sets.resize(uniform_buffers.size());
 
@@ -118,17 +139,33 @@ public:
       buffer_info.offset = 0;
       buffer_info.range = sizeof(T);
 
-      VkWriteDescriptorSet descriptor_write{};
-      descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-      descriptor_write.dstSet = descriptor_sets[i];
-      descriptor_write.dstBinding = 0;
-      descriptor_write.dstArrayElement = 0;
-      descriptor_write.pBufferInfo = &buffer_info;
-      descriptor_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-      descriptor_write.descriptorCount = 1;
+      VkDescriptorImageInfo image_info{};
 
-      vkUpdateDescriptorSets(logical_device.handle, 1, &descriptor_write, 0,
-                             nullptr);
+      image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      image_info.imageView = image_view.handle;
+      image_info.sampler = sampler.handle;
+
+      std::array<VkWriteDescriptorSet, 2> descriptor_writes{};
+      descriptor_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptor_writes[0].dstSet = descriptor_sets[i];
+      descriptor_writes[0].dstBinding = 0;
+      descriptor_writes[0].dstArrayElement = 0;
+      descriptor_writes[0].pBufferInfo = &buffer_info;
+      descriptor_writes[0].descriptorType =
+          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+      descriptor_writes[0].descriptorCount = 1;
+
+      descriptor_writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      descriptor_writes[1].dstSet = descriptor_sets[i];
+      descriptor_writes[1].dstBinding = 1;
+      descriptor_writes[1].dstArrayElement = 0;
+      descriptor_writes[1].pImageInfo = &image_info;
+      descriptor_writes[1].descriptorType =
+          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      descriptor_writes[1].descriptorCount = 1;
+
+      vkUpdateDescriptorSets(logical_device.handle, descriptor_writes.size(),
+                             descriptor_writes.data(), 0, nullptr);
     }
 
     return VulkanDescriptorSet(descriptor_sets);

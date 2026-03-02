@@ -176,7 +176,7 @@ struct VulkanPhysicalDevicePicker {
                                !swap_chain_support.preset_modes.empty();
 
     return queue_family_indices.exists() && device_features.geometryShader &&
-           is_swap_chain_valid;
+           is_swap_chain_valid && device_features.samplerAnisotropy;
   }
 };
 
@@ -191,7 +191,10 @@ public:
 
   bool is_handle_valid() { return handle != VK_NULL_HANDLE; }
 
-  static VulkanLogicalDevice create(const VulkanPhysicalDevice &physical_device);
+  static VulkanLogicalDevice
+  create(const VulkanPhysicalDevice &physical_device);
+
+  void cleanup() { vkDestroyDevice(handle, nullptr); }
 };
 
 }; // namespace zephyr

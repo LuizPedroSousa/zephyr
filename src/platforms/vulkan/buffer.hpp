@@ -2,7 +2,10 @@
 
 #include "assert.hpp"
 #include "platforms/vulkan/command-buffer.hpp"
+#include "platforms/vulkan/command-pool.hpp"
 #include "platforms/vulkan/device.hpp"
+#include "platforms/vulkan/queue.hpp"
+#include <optional>
 #include <vulkan/vulkan_core.h>
 
 namespace zephyr {
@@ -43,11 +46,17 @@ T static make(VulkanLogicalDevice logical_device, VkDeviceSize size,
 
 template <typename T>
 void allocate(T region, VulkanPhysicalDevice physical_device,
-              VkMemoryPropertyFlags properties) {
+              VkMemoryPropertyFlags properties,
+              std::optional<VkMemoryRequirements> p_mem_requirements) {
+
   VkMemoryRequirements mem_requirements;
 
-  vkGetBufferMemoryRequirements(region->ld_handle, region->buffer,
-                                &mem_requirements);
+  if (!p_mem_requirements.has_value()) {
+    vkGetBufferMemoryRequirements(region->ld_handle, region->buffer,
+                                  &mem_requirements);
+  } else {
+    mem_requirements = p_mem_requirements.value();
+  }
 
   VkMemoryAllocateInfo alloc_info{};
   alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -74,41 +83,22 @@ template <typename T> void upload(T region, void *data) {
 
 template <typename S, typename D>
 void copy(S source_region, D destination_region, VkDeviceSize size,
-          VkQueue queue, VkCommandPool command_pool) {
+          VkQueue queue, VulkanCommandPool command_pool) {
 
   ZEPH_ENSURE(source_region->ld_handle != destination_region->ld_handle,
               "Can't handle cross device copy");
 
-  VkCommandBuffer command_buffer;
+  auto command_buffer = VulkanCommandBuffer::make(command_pool.ld_handle);
 
-  VkCommandBufferAllocateInfo allocate_info =
-      VulkanCommandBuffer::declare_allocate(1, command_pool);
+  command_pool.allocate(command_buffer);
 
-  ZEPH_ENSURE(vkAllocateCommandBuffers(source_region->ld_handle, &allocate_info,
-                                       &command_buffer) != VK_SUCCESS,
-              "Couldn't allocate command buffer");
+  command_buffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+  command_buffer.copy(source_region->buffer, destination_region->buffer, size);
+  command_buffer.end();
 
-  VkCommandBufferBeginInfo begin_info = VulkanCommandBuffer::declare_begin(
-      VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+  VulkanQueue::submit(queue, command_buffer.handle, true);
 
-  vkBeginCommandBuffer(command_buffer, &begin_info);
-
-  VkBufferCopy copy_region = VulkanBuffer::declare_copy_region(0, 0, size);
-
-  vkCmdCopyBuffer(command_buffer, source_region->buffer,
-                  destination_region->buffer, 1, &copy_region);
-
-  vkEndCommandBuffer(command_buffer);
-
-  std::vector<VkCommandBuffer> command_buffers = {command_buffer};
-  VkSubmitInfo submit_info = VulkanQueue::declare_submit(command_buffers);
-
-  vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
-
-  vkQueueWaitIdle(queue);
-
-  vkFreeCommandBuffers(source_region->ld_handle, command_pool, 1,
-                       &command_buffer);
+  command_pool.flush(command_buffer);
 }
 
 struct TransientStagingRegion {
@@ -126,10 +116,11 @@ struct TransientStagingRegion {
                                                       usage);
   }
 
-  void allocate(VulkanPhysicalDevice physical_device,
-                VkMemoryPropertyFlags properties) {
+  void allocate(
+      VulkanPhysicalDevice physical_device, VkMemoryPropertyFlags properties,
+      std::optional<VkMemoryRequirements> mem_requirements = std::nullopt) {
 
-    VulkanBuffer::allocate(this, physical_device, properties);
+    VulkanBuffer::allocate(this, physical_device, properties, mem_requirements);
   }
 
   void map() { VulkanBuffer::map(this); }
@@ -173,10 +164,10 @@ struct DeviceLocalRegion {
     return VulkanBuffer::make<DeviceLocalRegion>(logical_device, size, usage);
   }
 
-  void allocate(VulkanPhysicalDevice physical_device,
-                VkMemoryPropertyFlags properties) {
-
-    VulkanBuffer::allocate(this, physical_device, properties);
+  void allocate(
+      VulkanPhysicalDevice physical_device, VkMemoryPropertyFlags properties,
+      std::optional<VkMemoryRequirements> mem_requirements = std::nullopt) {
+    VulkanBuffer::allocate(this, physical_device, properties, mem_requirements);
   }
 
   void map() { VulkanBuffer::map(this); }
@@ -190,7 +181,8 @@ struct DeviceLocalRegion {
   void upload(void *data) { VulkanBuffer::upload(this, data); }
 
   template <typename T>
-  void copy_from(T *source_region, VkQueue queue, VkCommandPool command_pool) {
+  void copy_from(T *source_region, VkQueue queue,
+                 VulkanCommandPool command_pool) {
     VulkanBuffer::copy(source_region, this, size, queue, command_pool);
   }
 

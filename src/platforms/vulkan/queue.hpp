@@ -5,6 +5,8 @@
 #include <vulkan/vulkan_core.h>
 namespace zephyr {
 
+struct VulkanCommandBuffer;
+
 struct VulkanQueueFamilyIndices {
   std::optional<uint32_t> graphics_family;
   std::optional<uint32_t> present_family;
@@ -55,14 +57,33 @@ struct VulkanQueueFamilyIndices {
 
 class VulkanQueue {
 public:
-  static VkSubmitInfo
-  declare_submit(std::vector<VkCommandBuffer> &command_buffers) {
+  static VkSubmitInfo declare_submit(std::vector<VkCommandBuffer> &handles) {
     VkSubmitInfo submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit_info.commandBufferCount = command_buffers.size();
-    submit_info.pCommandBuffers = command_buffers.data();
+    submit_info.commandBufferCount = handles.size();
+    submit_info.pCommandBuffers = handles.data();
 
     return submit_info;
+  }
+
+  static void submit(VkQueue queue,
+                     std::vector<VkCommandBuffer> &command_buffers,
+                     bool wait_idle = false, VkFence fence = VK_NULL_HANDLE) {
+
+    VkSubmitInfo submit_info = declare_submit(command_buffers);
+
+    vkQueueSubmit(queue, 1, &submit_info, fence);
+
+    if (wait_idle) {
+      vkQueueWaitIdle(queue);
+    }
+  }
+
+  static void submit(VkQueue queue, VkCommandBuffer &command_buffer,
+                     bool wait_idle = false, VkFence fence = VK_NULL_HANDLE) {
+    std::vector<VkCommandBuffer> command_buffers = {command_buffer};
+
+    submit(queue, command_buffers, wait_idle, fence);
   }
 };
 
