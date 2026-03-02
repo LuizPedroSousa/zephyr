@@ -10,3 +10,6 @@ fi
 
 glslc $SHADERS_DIR/shader.vert -o $OUTPUT_DIR/shader.vert.spv
 glslc $SHADERS_DIR/shader.frag -o $OUTPUT_DIR/shader.frag.spv
+
+glslc $SHADERS_DIR/grid.vert -o $OUTPUT_DIR/grid.vert.spv
+glslc $SHADERS_DIR/grid.frag -o $OUTPUT_DIR/grid.frag.spv

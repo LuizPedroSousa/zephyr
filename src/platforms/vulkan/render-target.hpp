@@ -293,6 +293,35 @@ public:
                      1, 0, 0, 0);
   }
 
+  void setup_grid_pipeline() {
+    m_grid_pipeline = VulkanGraphicsPipeline::create(
+        m_logical_device, m_swap_chain, m_descriptor_set_layout, m_render_pass,
+        {.vert_path = "assets/shaders/grid.vert.spv",
+         .frag_path = "assets/shaders/grid.frag.spv",
+         .cull_mode = VK_CULL_MODE_NONE,
+         .vertex_input = false,
+         .alpha_blend = true,
+         .owns_render_pass = false});
+  }
+
+  void draw(VkCommandBuffer command_buffer, uint32_t frame_index,
+            uint32_t slot) {
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      m_grid_pipeline.handle());
+
+    auto dynamic_offset = static_cast<uint32_t>(slot * m_ubo_aligned_stride);
+
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_grid_pipeline.layout(), 0, 1,
+                            &m_descriptor_sets[frame_index], 1,
+                            &dynamic_offset);
+
+    vkCmdDraw(command_buffer, 3, 1, 0, 0);
+
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      m_graphics_pipeline.handle());
+  }
+
   void end_frame(VkCommandBuffer command_buffer) {
     vkCmdEndRenderPass(command_buffer);
 
@@ -395,6 +424,7 @@ public:
       uniform_buffer.cleanup();
     }
 
+    m_grid_pipeline.cleanup();
     m_graphics_pipeline.cleanup();
 
     cleanup_semaphores();
@@ -445,6 +475,7 @@ private:
   VulkanPhysicalDevice m_physical_device;
   VulkanLogicalDevice m_logical_device;
   VulkanGraphicsPipeline m_graphics_pipeline;
+  VulkanGraphicsPipeline m_grid_pipeline;
   VulkanRenderPass m_render_pass;
   VulkanSurface m_surface;
   VulkanDescriptorSetLayout m_descriptor_set_layout;
