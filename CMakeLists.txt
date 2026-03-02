@@ -28,9 +28,17 @@ add_definitions(-DGLM_ENABLE_EXPERIMENTAL)
 file(GLOB_RECURSE ZEPHYR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 file(GLOB_RECURSE ZEPHYR_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp)
 
+add_library(stb_image STATIC "external/stb_image/stb_image.cpp")
+
+target_include_directories(stb_image
+  PUBLIC
+  ${CMAKE_SOURCE_DIR}/external
+)
+
 add_executable(zephyr ${ZEPHYR_SRC} ${ZEPHYR_HEADERS})
 
-target_link_libraries(zephyr PRIVATE glfw glm::glm vulkan)
+target_link_libraries(zephyr PRIVATE glfw glm::glm vulkan stb_image)
+
 
 target_include_directories(zephyr PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src) 
 
